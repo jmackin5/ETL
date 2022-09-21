@@ -1,0 +1,14 @@
+    ##DB executions
+    con = pgdb.connect(database=dbname, host=dbhost, port=dbport, user=dbusername, password=dbpassword)
+    
+    cur = con.cursor()
+   
+    sql = "CALL functions.ehr_athena_table_load()"
+    
+
+    cur.execute(sql)
+    con.commit()
+    
+    
+    cur.close()
+    con.close()
