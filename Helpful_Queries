@@ -1,0 +1,432 @@
+---creating a function
+--- for Redshift/glue functions need to change 'truncate' to 'delete table'
+
+CREATE OR REPLACE PROCEDURE functions.care_management_model_load()
+LANGUAGE plpgsql
+AS $$
+
+    
+    
+    BEGIN
+        ---crs_episode_status_dim
+        ---R:6
+        ---E:6
+        truncate table CARE_MANAGEMENT_model.crs_episode_status_dim;
+        insert into  CARE_MANAGEMENT_model.crs_episode_status_dim 
+        ---create table care_management_model.crs_episode_status_dim as
+        select episode_status_id,episode_status,episode_order from (
+        select distinct
+            id episode_status_id,
+            display_name episode_status,
+            "order" episode_order
+        from
+         care_management.recovery_refepisodestatus refs
+            ) a ;
+
+    END;
+
+
+$$
+;
+
+
+-- granting permissions 
+-----whenever you create a new table and is going to be populated from glue give full access to cim_service account
+GRANT ALL ON TABLE ehr_athena.patient TO dim_service;
+
+---------redshfit
+--users and groups
+SELECT usename, groname
+
+FROM pg_user, pg_group
+
+WHERE pg_user.usesysid = ANY(pg_group.grolist)
+
+AND pg_group.groname in (SELECT DISTINCT pg_group.groname from pg_group);
+--granting
+grant all on schema OA_CNTIN to group analytics;
+    grant all on schema ops_model to group analytics;
+
+        try grant select on all tables in schema ops_model to group analytics;
+
+----see who has access
+SELECT
+    u.usename,
+    s.schemaname,
+    has_schema_privilege(u.usename,s.schemaname,'create') AS user_has_select_permission,
+    has_schema_privilege(u.usename,s.schemaname,'usage') AS user_has_usage_permission
+FROM
+    pg_user u
+CROSS JOIN
+    (SELECT DISTINCT schemaname FROM pg_tables) s
+WHERE
+    ---u.usename = 'myUserName'
+     s.schemaname = 'ops_model'
+;
+
+
+------default permissions on a schema 
+
+create group care_management_group;
+
+
+alter group care_management_group
+add user cholmes, aregelsberger,
+erhoades, mmcarver, awhite,
+jburkholdertravis;
+
+
+grant usage on schema 
+care_management_model to group care_management_group;
+
+
+grant select on all tables in schema care_management_model
+to group care_management_group;
+
+
+alter default privileges in schema
+care_management_model grant select on tables
+to group care_management_group; 
+
+---------myself default perm
+alter default privileges for user jmackinnon in schema
+client_production grant select on tables
+to group ops_model_group;
+
+
+---- find strings in functions on reporting
+
+select
+    nspname,
+    proname,
+    prosrc 
+from pg_catalog.pg_proc pr
+join pg_catalog.pg_namespace ns on ns.oid = pr.pronamespace
+where prosrc ilike '%search text%'
+
+
+---- 
+
+checking to see if things are locked on ods 
+
+select * from pg_stat_activity
+where usename = 'dim_service'
+
+select query,* from pg_stat_activity
+where usename in ('dim_service')
+
+select * from client_process.lock_view;
+
+
+-----
+
+creating a schema from reshfit server
+
+create external schema admin_api_raw
+from data catalog
+database 'admin_api'
+iam_role 'arn:aws:iam::877582243023:role/Redshift-Spectrum';
+
+-----
+
+changing datatypes in sql 
+
+#Redshift
+alter table reporting.rpt_fax_log_id_exclusions alter column comments type varchar(300)
+;
+
+#Exasol
+ALTER TABLE COTIVITI.COTIVITI_MODEL_RESULTS MODIFY COLUMN predictive_value FLOAT;
+
+RENAME TABLE COTIVITI.COTIVITI_REFMODEL TO cotiviti_refmodel_v5;
+
+---------
+
+array
+
+INSERT INTO dataops_ods.sud_home_outreach_needs_base (client_specialty_test)
+select array_join(client_specialty, ' ') from dataops_ods.sud_home_outreach_needs_base
+
+
+--------
+
+Checking master table upload - iqbal 
+
+
+select sftp_secretname,file_domain,client_name,s3_bucket,sftp_file_name_format,sftp_sourcefolder,s3_folder_path,axial_sftp_key,axial_sftp_path,file_name_format,file_encoding, s.master_file_detail_id
+from client_process.master_file_detail fd inner join user_iindawala.master_file_detail_sftp s on fd.master_file_detail_id = s.master_file_detail_id
+inner join client_process.master_client c on fd.client_id = c.client_id
+
+
+
+select master_file_detail_sftp_id,sftp_secretname,file_domain,client_name,s3_bucket,sftp_file_name_format,sftp_sourcefolder,s3_folder_path,axial_sftp_key,axial_sftp_path,file_name_format,file_encoding, s.master_file_detail_id
+from client_process.master_file_detail fd inner join user_iindawala.master_file_detail_sftp s on fd.master_file_detail_id = s.master_file_detail_id
+inner join client_process.master_client c on fd.client_id = c.client_id
+
+##columns 
+select * from client_process.master_file_import 
+where master_file_detail_id = '200'
+
+## logids 
+SELECT * FROM client_process.file_log order by 1 desc
+
+
+
+-------- exasol table searhc
+
+SELECT * FROM exa_all_tables 
+WHERE TABLE_name LIKE '%outreach%'
+LIMIT 50 
+
+SELECT * FROM exa_all_views 
+WHERE view_name LIKE '%outreach%'
+LIMIT 50 
+
+SELECT * FROM exa_all_scripts 
+WHERE script_text LIKE '%outreach%'
+LIMIT 50 
+
+    -----postgres
+select 
+    proname AS FunctionName 
+    ,prosrc
+from pg_proc 
+    where prosrc like '%mst_provider_groups%';
+
+
+
+--------- to check where monthly loads are 
+
+select * from pg_stat_activity
+where username in ()
+
+---enter pid
+SELECT pg_terminate_backend(18439);
+
+--exasol
+select * from exa_dba_sessions WHERE os_user = 'jmackinnon'
+
+
+------ To start ods processes for files go on ods screen and run commands like this. 
+
+psql axial_ods -c "select risk_score_processing.risk_score()"
+
+
+--------- when there are multiple axial_member_ids
+--- Need to find out the ID, of the null row
+--- Then need to add ID in step 3 of dataops_to_reporting.check_care_management_amid() line 95
+--- Then re-run that function with the correct client name  "Executed select dataops_to_reporting.check_care_management_amid('agptn')"
+
+--Getting id for NULL AXIAL_MEMBER_ID.
+select * from care_management.patients_patient
+where axial_member_id = 55263920 
+or first_name||last_name = (select first_name||last_name from care_management.patients_patient
+where axial_member_id = 55263920 )
+Added id 3512 to function - dataops_to_reporting.check_care_management_amid in INSERT INTO dataops_to_reporting.care_management_xwalk_log
+Executed select dataops_to_reporting.check_care_management_amid('agptn')
+
+
+
+---she is in there twice, once for client 6 and once for client 1
+select * from dataops_to_reporting.care_management_xwalk_log
+where axial_member_id_assigned  = 56855405
+
+select * from dataops_to_reporting.patients_patient_prod 
+where first_name = 'ANGELA'
+and last_name = 'OWEN'
+
+
+--- group of people in client 1 and 6 
+
+with c1 as (
+        select *
+        from dataops_to_reporting.patients_patient_prod
+        where client_id = 1
+)
+
+, c6 as (
+        select *
+        from dataops_to_reporting.patients_patient_prod
+        where client_id = 6
+)
+
+select * 
+from c1 
+inner join c6 on c1.first_name = c6.first_name 
+              and c1.last_name = c6.last_name 
+              and c1.subscriber_id = c6.subscriber_id limit 50 
+              
+              
+select subscriber_id, count(*) from   dataops_to_reporting.patients_patient_prod
+group by 1 
+order by 2 desc 
+
+
+------------
+--motnhly noad part 2 
+
+/home/jmackinnon/scripts/reporting_warehouse_updatepart2.sql
+
+
+psql reporting -f '/home/jmackinnon/scripts/reporting_warehouse_updatepart2.sql'
+
+
+
+------- 
+monthly load part 3 
+1.) log onto exasol box
+2.) ssh jmackinnon@10.4.6.170
+3.) enter password
+4.) screen or old screen (-r -d <screen number>) or (screen -ls)
+5.) to get out of screen cntrl 'a' 'd' brings back to command prompt
+6.) to enter database enter 
+        '/usr/opt/EXASuite-7/EXASolution-7.0.4/bin/Console/exaplus -u jmackinnon -c localhost:8563'
+        enter password 
+     
+        sql commands
+
+----Copying folders from cebrus to ods
+cp -rp source-dir/ dest-dir/
+
+---- wc
+outside database head -5 <pathname> to see the file
+once all files create wc -l *.txt to check line numebrs 
+    ls -alh 
+
+sed -n '151224p' Centene_SUD_Data_extract_provider_20190301_20200229.txt
+
+
+
+
+---copying tables from ods to redshfit 
+
+
+1.) psql axial_ods -c "\copy user_rnateqi.caresource_claims_transaction_extract_prod TO '/home/jmackinnon/temp/caresource_claims_transaction_extract_prod_04192022.txt' DELIMITER '|' CSV HEADER; "
+2.) upload to s3, aws s3 cp blah blah
+3.) psql -h 10.10.4.205 -U jmackinnon -d axial_research -p 5439
+
+
+COPY research_rnateqi.caresource_claims_transaction_extract FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/caresource_claims_transaction_extract_prod_04192022.txt' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+
+
+----copying from local to ods
+
+psql axial_ods -c "\copy user_jmackinnon.hmkde_eligibility_04212022 FROM '/home/jmackinnon/temp/ENROLL_HIGHMARK_NONMEDICAID_Mar_2022.txt' DELIMITER '|' CSV HEADER; "
+
+
+
+
+
+
+-----------Creating new oa_ directory based off config of another
+cp -rp source-dir/ dest-dir/
+
+
+
+
+
+
+
+-----exasol to redshift
+---EXPORT OA_CNTIN.MAT_ADHERENCE_DAYS INTO LOCAL CSV FILE '/home/jmackinnon/imports/OA_CNTIN_MAT_ADHERENCE_DAYS_2022-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+
+---EXPORT OA_CNTIN.MEDICAL_CLAIM INTO LOCAL CSV FILE '/home/jmackinnon/imports/OA_CNTIN_MEDICAL_CLAIM_2022-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+
+---EXPORT OA_CNTIN.MEDICAL_CLAIM_DIAGNOSIS_LONG INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEDICAL_CLAIM_DIAGNOSIS_LONG-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MEDICAL_CLAIM_DIAGNOSIS_WIDE INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEDICAL_CLAIM_DIAGNOSIS_WIDE-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MEDICAL_CLAIM_DX_LONG INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEDICAL_CLAIM_DX_LONG-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MEMBER_ADDRESS_DIM INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEMBER_ADDRESS_DIM-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MEMBER_DIM INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEMBER_DIM-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MEMBER_EOL INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEMBER_EOL-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MEMBER_EOL_EVENT INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEMBER_EOL_EVENT-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MEMBER_PROVIDER_RESULTS_FACT INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEMBER_PROVIDER_RESULTS_FACT-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MEMBER_SUBSCRIBER INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEMBER_SUBSCRIBER-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MST_MEDICAL_CLAIMS INTO LOCAL CSV FILE '/home/jmackinnon/imports/MST_MEDICAL_CLAIMS-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MST_MEMBER_MONTH_BY_LOB INTO LOCAL CSV FILE '/home/jmackinnon/imports/MST_MEMBER_MONTH_BY_LOB-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MST_MEMBER_PROVIDER_XREF INTO LOCAL CSV FILE '/home/jmackinnon/imports/MST_MEMBER_PROVIDER_XREF-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MST_MEMBER_RESULTS INTO LOCAL CSV FILE '/home/jmackinnon/imports/MST_MEMBER_RESULTS-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MST_PROVIDER_DIM INTO LOCAL CSV FILE '/home/jmackinnon/imports/MST_PROVIDER_DIM-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MST_PROVIDER_RESULTS INTO LOCAL CSV FILE '/home/jmackinnon/imports/MST_PROVIDER_RESULTS-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MST_RX_CLAIMS INTO LOCAL CSV FILE '/home/jmackinnon/imports/MST_RX_CLAIMS-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.PROVIDER_ADDRESS_DIM INTO LOCAL CSV FILE '/home/jmackinnon/imports/PROVIDER_ADDRESS_DIM-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.PROVIDER_GROUP_XREF_DIM INTO LOCAL CSV FILE '/home/jmackinnon/imports/PROVIDER_GROUP_XREF_DIM-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.PROVIDER_NAME_DIM INTO LOCAL CSV FILE '/home/jmackinnon/imports/PROVIDER_NAME_DIM-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.RX_CLAIM INTO LOCAL CSV FILE '/home/jmackinnon/imports/RX_CLAIM-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+
+
+---COPY OA_CNTIN.MAT_ADHERENCE_DAYS FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/OA_CNTIN_MAT_ADHERENCE_DAYS_2022-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEDICAL_CLAIM FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/OA_CNTIN_MEDICAL_CLAIM_2022-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEDICAL_CLAIM_DIAGNOSIS_LONG FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEDICAL_CLAIM_DIAGNOSIS_LONG-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEDICAL_CLAIM_DIAGNOSIS_WIDE FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEDICAL_CLAIM_DIAGNOSIS_WIDE-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEDICAL_CLAIM_DX_LONG FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEDICAL_CLAIM_DX_LONG-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEMBER_ADDRESS_DIM FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEMBER_ADDRESS_DIM-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEMBER_EOL FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEMBER_EOL-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEMBER_EOL_EVENT FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEMBER_EOL_EVENT-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEMBER_PROVIDER_RESULTS_FACT FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEMBER_PROVIDER_RESULTS_FACT-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEMBER_SUBSCRIBER FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEMBER_SUBSCRIBER-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MST_MEDICAL_CLAIMS FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MST_MEDICAL_CLAIMS-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MST_MEMBER_MONTH_BY_LOB FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MST_MEMBER_MONTH_BY_LOB-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MST_MEMBER_PROVIDER_XREF FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MST_MEMBER_PROVIDER_XREF-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MST_MEMBER_RESULTS FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MST_MEMBER_RESULTS-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MST_PROVIDER_DIM FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MST_PROVIDER_DIM-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MST_PROVIDER_RESULTS FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MST_PROVIDER_RESULTS-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MST_RX_CLAIMS FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MST_RX_CLAIMS-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.PROVIDER_ADDRESS_DIM FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/PROVIDER_ADDRESS_DIM-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.PROVIDER_GROUP_XREF_DIM FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/PROVIDER_GROUP_XREF_DIM-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.PROVIDER_NAME_DIM FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/PROVIDER_NAME_DIM-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.RX_CLAIM FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/RX_CLAIM-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+
+
+---EXPORT OA_CNTIN.ASL_TRACKER INTO LOCAL CSV FILE '/home/jmackinnon/imports/ASL_TRACKER-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.ENHANCED_OUD INTO LOCAL CSV FILE '/home/jmackinnon/imports/ENHANCED_OUD-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.ENHANCED_SUD INTO LOCAL CSV FILE '/home/jmackinnon/imports/ENHANCED_SUD-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.KPI_DETAIL_CHECK INTO LOCAL CSV FILE '/home/jmackinnon/imports/KPI_DETAIL_CHECK-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.KPI_DETAIL_SPEND_CHECK INTO LOCAL CSV FILE '/home/jmackinnon/imports/KPI_DETAIL_SPEND_CHECK-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.KPI_SUMMARY_DETAIL INTO LOCAL CSV FILE '/home/jmackinnon/imports/KPI_SUMMARY_DETAIL-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MEMBER_OUD INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEMBER_OUD-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MONTHLY_TABLE_ALERTS INTO LOCAL CSV FILE '/home/jmackinnon/imports/MONTHLY_TABLE_ALERTS-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MONTHLY_TABLE_QA INTO LOCAL CSV FILE '/home/jmackinnon/imports/MONTHLY_TABLE_QA-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+---EXPORT OA_CNTIN.MONTHLY_TABLE_QA_TABLES_CLIENT INTO LOCAL CSV FILE '/home/jmackinnon/imports/MONTHLY_TABLE_QA_TABLES_CLIENT-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+
+
+
+---COPY OA_CNTIN.ASL_TRACKER FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/ASL_TRACKER-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.ENHANCED_OUD FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/ENHANCED_OUD-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.ENHANCED_SUD FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/ENHANCED_SUD-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.KPI_DETAIL_CHECK FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/KPI_DETAIL_CHECK-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.KPI_DETAIL_SPEND_CHECK FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/KPI_DETAIL_SPEND_CHECK-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.KPI_SUMMARY_DETAIL FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/KPI_SUMMARY_DETAIL-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MEMBER_OUD FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEMBER_OUD-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MONTHLY_TABLE_ALERTS FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MONTHLY_TABLE_ALERTS-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MONTHLY_TABLE_QA FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MONTHLY_TABLE_QA-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+---COPY OA_CNTIN.MONTHLY_TABLE_QA_TABLES_CLIENT FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MONTHLY_TABLE_QA_TABLES_CLIENT-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+
+EXPORT OA_CNTIN.MEMBER_DIM INTO LOCAL CSV FILE '/home/jmackinnon/imports/MEMBER_DIM-04-25.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+COPY OA_CNTIN.MEMBER_DIM FROM 's3://axialhealthcare-knox-etl-raw-dev/redshift/oa_cntin_tables/MEMBER_DIM-04-25.csv' iam_role 'arn:aws:iam::877582243023:role/Redshift_role' csv ignoreheader 1 delimiter '|';
+
+
+
+
+
+$ update client_production.rx_claim set amount_insurance_paid= '0.01' where client_id=6;
+where client_id=6;
+
+
+
+
+-----monthly load re-running 2 steps 
+
+---psql reporting -c 'select functions.analytics_insight_alerts_member_alert_by_interval_update();'
+
+psql reporting -c 'select functions.rpt_rim_and_peergroup();'
+
+
+
+
+-----Exasol to ods
+
+EXPORT SELECT * FROM ZZ_DBM.SUD_HOME_OUTREACH_COHORTS_V2 where CLIENT_NAME = 'agptn' or (CLIENT_NAME = 'csin' and PRIORITIZATION_RUN_DATE = '2022-04-26')  INTO LOCAL CSV FILE '/home/jmackinnon/imports/csin_ods_sud_home04272022.csv' COLUMN SEPARATOR = '|' WITH COLUMN NAMES;
+
+
+psql axial_ods -c "\copy user_jmackinnon.sud_home_outreach_cohorts_v2 FROM '/pg_part1/client_files/csin/csin_ods_sud_home04272022.csv' DELIMITER '|' CSV HEADER; "
+

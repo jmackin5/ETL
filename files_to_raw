@@ -1,0 +1,120 @@
+CREATE OR REPLACE FUNCTION client_process.import_files_to_raw(filelogid integer)
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+declare
+    filesToProcess cursor for
+      select distinct
+          fl.client_id
+          , fl.file_log_id
+          , fl.file_name
+          , fl.file_sha
+          , mfd.file_encoding
+          , mfd.file_domain
+          , mfd.has_header
+          , mfi.source_table
+          , mfi.destination_table
+          , mfd.file_delimiter
+          , mfd.file_quote_char
+          , mfd.null_string
+        from client_process.file_log fl
+        join client_process.master_file_detail mfd
+            on fl.master_file_detail_id = mfd.master_file_detail_id
+        join client_process.master_file_import mfi
+            on mfd.master_file_detail_id = mfi.master_file_detail_id
+        where fl.file_log_id = fileLogID
+      ;
+
+    rowToProcess record;
+    total_rows integer = 0;
+    empty_rows integer = 0;
+    to_formatted_result integer = -1;
+    to_hist_result integer = -1;
+    clientName text;
+    has_quotes integer = 0;
+    delimiter_string text;
+    null_string text;
+
+begin
+
+  open filesToProcess;
+
+  loop
+  fetch filesToProcess into rowToProcess;
+    exit when not found;
+
+      clientName = (select client_name from client_process.master_client where client_id = rowToProcess.client_id);
+
+      -- clean up source and destination
+      execute 'truncate table client_import.' || rowToProcess.source_table;
+      execute 'truncate table client_import.' || rowToProcess.destination_table;
+
+      --check if delimiter needs extra quotes, most of time is a yes.
+      has_quotes = (select position('''' in rowToProcess.file_delimiter));
+      if has_quotes > 0 then
+        select rowToProcess.file_delimiter into delimiter_string;
+        select rowToProcess.null_string into null_string;
+      else
+        select ''''||rowToProcess.file_delimiter||'''' into delimiter_string;
+        select rowToProcess.null_string into null_string;
+      end if;
+  
+      -- copy file in differently if it has a header than if it doesn't
+      -- uses configured info to correctly process intake
+      if rowToProcess.has_header then
+        execute '
+          copy client_import.' || rowToProcess.source_table || '
+            from ''/pg_part1/client_files/' || clientName || '/' || rowToProcess.file_domain || '/' || rowToProcess.file_name || '''
+              with csv header quote ''' || coalesce(rowToProcess.file_quote_char, '^') || ''' delimiter ' || delimiter_string || ' null ''' || coalesce(null_string,'') || ''' encoding '''|| rowToProcess.file_encoding ||''''
+        ;
+
+      else
+        execute '
+            copy client_import.' || rowToProcess.source_table || '
+              from ''/pg_part1/client_files/' || clientName || '/' || rowToProcess.file_domain || '/' || rowtoProcess.file_name || '''
+                with csv quote ''' || coalesce(rowToProcess.file_quote_char, '^') || ''' delimiter ' || delimiter_string || ' null ''' || coalesce(null_string,'') || ''' encoding '''|| rowToProcess.file_encoding ||''''
+        ;
+
+
+      end if;
+
+      -- count of records inserted logging
+      get diagnostics total_rows = row_count;
+      if total_rows > 0 then
+        insert into client_process.file_process_log (file_log_id, process_Name, process_total_rows, process_timestamp)
+          values(rowToProcess.file_log_id, 'file_import', total_rows, current_timestamp);
+
+          empty_rows = (select * from client_process.empty2null('client_import.' || rowToProcess.source_table));
+
+      elseif total_rows <= 0 then
+        close filesToProcess;
+        return -1; -- error no records copied in
+
+      end if;
+
+    -- format file into named table
+    to_formatted_result = (select * from client_process.import_raw_to_formatted(rowToProcess.file_log_id));
+
+    if to_formatted_result <= 0 or to_formatted_result != total_rows then
+      close filesToProcess;
+      return -2; -- error, formatted did not work or returned wrong record count
+    else
+      -- save formatted data into history
+      to_hist_result = (select * from client_process.import_formatted_to_hist(rowToProcess.file_log_id));
+
+      if to_hist_result <= 0 or to_formatted_result != to_hist_result then
+        close filesToProcess;
+        return -3; -- error, to hist did not work or returned wrong record count
+      end if;
+
+    end if;
+
+  end loop; -- this loop ensures all files in file log not in file process log get ran through
+
+  close filesToProcess;
+  return total_rows; -- success!
+
+end;
+$function$
+;

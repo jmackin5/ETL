@@ -1,0 +1,20 @@
+1.) Go to athena and create a new database to store tables in:
+	- CREATE DATABASE ods_2_catalog_<schema_name>
+2.) Create crawler that dumps ods tables into schema
+	-care_management_testv2
+	-ods_2_catalog_<schema_name>
+
+3.) Run code that turns tables on catalog into s3 tables 
+	-CaremanagementRDS
+	-catalog_2_s3_<schema_name>
+	-SHOW TABLES IN <schema_name>
+
+4.) Go to athean and create another database to store new s3tables into:
+	- CREATE DATABASE s3_2_athena_<schema_name>
+5.) Create another crawler that dumps s3 data into schema
+	-s3_2_athena_<schema_name>
+6.) On dbeaver
+create external schema care_management_raw
+from data catalog
+database 's3_2_athena_caremanagement'
+iam_role 'arn:aws:iam::877582243023:role/Redshift-Spectrum';
